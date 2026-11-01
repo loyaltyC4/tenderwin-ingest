@@ -1,0 +1,32 @@
+name: Ingest
+on:
+  schedule:
+    - cron: "15 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      run_states: { description: "Also scan VIC/ACT/NT/TAS/WA/councils (uses Firecrawl)", default: "0" }
+      run_nsw: { description: "Also scan NSW (uses ~19 Firecrawl credits)", default: "0" }
+concurrency: { group: ingest, cancel-in-progress: false }
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install --no-audit --no-fund
+      - name: Reachability probe (informational, never fails the run)
+        run: |
+          UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
+          for u in https://www.tenders.gov.au/public_data/rss/rss.xml https://api.tenders.gov.au/ocds/findByDates/contractPublished/2026-10-29T00:00:00Z/2026-11-01T00:00:00Z https://buy.nsw.gov.au/opportunity/search/ https://www.tenders.vic.gov.au/ https://www.tenders.act.gov.au/ https://www.tenders.tas.gov.au/OpenForBids/List/Public/Agency; do
+            printf '%s -> ' "$u"; curl -sS -m 25 -A "$UA" -o /dev/null -w '%{http_code}\n' "$u" || true
+          done
+      - name: Run ingest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRECRAWL_API_KEYS: ${{ secrets.FIRECRAWL_API_KEYS }}
+          RUN_STATES: ${{ github.event.inputs.run_states }}
+          RUN_NSW: ${{ github.event.inputs.run_nsw }}
+        run: node run.mjs
