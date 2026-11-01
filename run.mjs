@@ -19,7 +19,8 @@ async function main() {
   const all = [];
   const federal = summarise(await runPortalIngest({ force: true }));
   federal.forEach((r) => log('federal', r)); all.push(...federal);
-  if (runStates) { const s = summarise(await runStatePortalsIngest({ force: true })); s.forEach((r) => log('states', r)); all.push(...s); }
+  // WA blocks GitHub's IP range (403), so a small Vercel route covers it: skip it here.
+  if (runStates) { const s = summarise(await runStatePortalsIngest({ force: true, skip: ['wa-tenders'] })); s.forEach((r) => log('states', r)); all.push(...s); }
   if (runNsw) { const n = summarise(await runNswIngest({ force: true })); n.forEach((r) => log('nsw', r)); all.push(...n); }
   const ok = all.filter((r) => r.ok).length;
   console.log(JSON.stringify({ stage: 'done', ok, failed: all.length - ok, runStates, runNsw, ms: Date.now() - t0 }));
