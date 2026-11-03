@@ -3,7 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node run.mjs" },
-  "engines": { "node": ">=20" },
-  "dependencies": { "@supabase/supabase-js": "2.47.10" }
+  "scripts": {
+    "start": "node run.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.47.10",
+    "unpdf": "1.8.1"
+  }
 }
