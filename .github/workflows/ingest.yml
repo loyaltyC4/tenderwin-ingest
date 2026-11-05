@@ -31,3 +31,9 @@ jobs:
           RUN_STATES: ${{ github.event.inputs.run_states }}
           RUN_NSW: ${{ github.event.inputs.run_nsw }}
         run: node run.mjs
+      - name: Refresh document lists (cached, paced; never fails the run)
+        if: always()
+        continue-on-error: true
+        env:
+          DOCS_REFRESH_TOKEN: ${{ secrets.DOCS_REFRESH_TOKEN }}
+        run: node scripts/docs-refresh.mjs
