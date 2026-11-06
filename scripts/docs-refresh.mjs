@@ -11,9 +11,13 @@ const perCall = Number(process.env.DOCS_PER_CALL || 10);
 const sum = { calls: 0, processed: 0, withFiles: 0, empty: 0, failed: 0 };
 let last = {};
 for (let i = 0; i < maxCalls; i++) {
-  let r;
-  try { r = await fetch(`${base}/api/cron/docs-refresh?limit=${perCall}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(80000) }); }
-  catch (e) { console.log(JSON.stringify({ stage: 'docs-refresh', call: i + 1, error: String(e?.message || e).slice(0, 80) })); break; }
+  // One transient network error (a dropped connection mid-call) is retried after a pause, not fatal.
+  let r = null, err = '';
+  for (let attempt = 0; attempt < 2 && !r; attempt++) {
+    try { r = await fetch(`${base}/api/cron/docs-refresh?limit=${perCall}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(80000) }); }
+    catch (e) { err = String(e?.cause?.code || e?.message || e).slice(0, 80); console.log(JSON.stringify({ stage: 'docs-refresh', call: i + 1, attempt: attempt + 1, error: err })); if (attempt === 0) await new Promise((res) => setTimeout(res, 8000)); }
+  }
+  if (!r) break;
   if (!r.ok) { console.log(JSON.stringify({ stage: 'docs-refresh', call: i + 1, http: r.status })); break; }
   const j = await r.json().catch(() => ({}));
   last = j; sum.calls++;
