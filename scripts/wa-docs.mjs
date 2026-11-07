@@ -31,9 +31,20 @@ console.log(`WA docs: ${cands.length} active rows, ${live.length} seen in the la
 if (!due.length) process.exit(0);
 
 const wa = new WaSession();
-try {
-  await wa.login({ user: E.WA_USER, pass: E.WA_PASS, gmailUser: E.GMAIL_USER, gmailPass: E.GMAIL_APP_PASS });
-} catch (e) { warn("login failed: " + e.message); process.exit(0); }
+// WA's site blocks some runner IPs now and then (the page comes back without a login nonce); a fresh session a
+// little later usually gets through. Three tries, 40s apart, then give up quietly until the next run.
+let loggedIn = false;
+for (let attempt = 1; attempt <= 3 && !loggedIn; attempt++) {
+  try {
+    await wa.login({ user: E.WA_USER, pass: E.WA_PASS, gmailUser: E.GMAIL_USER, gmailPass: E.GMAIL_APP_PASS });
+    loggedIn = true;
+  } catch (e) {
+    console.log(`WA docs: login attempt ${attempt} failed: ${e.message}`);
+    if (/wa_not_configured|wa_login_rejected|wa_token_rejected/.test(e.message)) break; // retrying a rejected password risks a lock-out
+    if (attempt < 3) { wa.jar.clear(); await sleep(40000); }
+  }
+}
+if (!loggedIn) { warn("login failed after retries"); process.exit(0); }
 console.log("WA docs: logged in");
 
 if (!DRY) { const { error: be } = await sb.storage.createBucket(WA_BUCKET, { public: false }); if (be && !/already exists|duplicate/i.test(be.message)) warn("bucket: " + be.message); }
