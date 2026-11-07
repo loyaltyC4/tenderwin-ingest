@@ -6,11 +6,13 @@ on:
     inputs:
       run_states: { description: "Also scan VIC/ACT/NT/TAS/WA/councils (uses Firecrawl)", default: "0" }
       run_nsw: { description: "Also scan NSW (uses ~19 Firecrawl credits)", default: "0" }
+      wa_docs_limit: { description: "Tenders WA: max document packs to download this run", default: "15" }
+      wa_docs_dry: { description: "Tenders WA: 1 = log in and read lists but store nothing", default: "0" }
 concurrency: { group: ingest, cancel-in-progress: false }
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,3 +39,16 @@ jobs:
         env:
           DOCS_REFRESH_TOKEN: ${{ secrets.DOCS_REFRESH_TOKEN }}
         run: node scripts/docs-refresh.mjs
+      - name: Tenders WA documents (logs in, downloads new packs, stores them; never fails the run)
+        if: always()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          WA_USER: ${{ secrets.WA_USER }}
+          WA_PASS: ${{ secrets.WA_PASS }}
+          GMAIL_USER: ${{ secrets.WA_GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.WA_GMAIL_APP_PASS }}
+          WA_DOCS_LIMIT: ${{ github.event.inputs.wa_docs_limit || '15' }}
+          WA_DRY: ${{ github.event.inputs.wa_docs_dry || '0' }}
+        run: node scripts/wa-docs.mjs
