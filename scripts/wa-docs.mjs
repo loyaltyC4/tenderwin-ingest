@@ -12,7 +12,7 @@ import { waViewId, waSignature, buildWaRows, waStorageKey, contentTypeFor, WA_BU
 
 const E = process.env;
 const LIMIT = Number(E.WA_DOCS_LIMIT || 15), CHECK_MS = Number(E.WA_CHECK_HOURS || 20) * 3600e3, DRY = E.WA_DRY === "1";
-const BUDGET_MS = 14 * 60e3, started = Date.now();
+const BUDGET_MS = Number(E.WA_BUDGET_MIN || 14) * 60e3, started = Date.now();
 const warn = (m) => console.log(`::warning::WA docs: ${m}`);
 if (!E.SUPABASE_URL || !E.SUPABASE_SERVICE_ROLE_KEY) { warn("no Supabase credentials"); process.exit(0); }
 if (!E.WA_USER || !E.WA_PASS || !E.GMAIL_USER || !E.GMAIL_APP_PASS) { warn("WA/Gmail secrets not set, skipping"); process.exit(0); }
