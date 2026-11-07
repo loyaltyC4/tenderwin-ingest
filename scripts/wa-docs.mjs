@@ -19,12 +19,15 @@ if (!E.WA_USER || !E.WA_PASS || !E.GMAIL_USER || !E.GMAIL_APP_PASS) { warn("WA/G
 const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
 const { data: cands, error } = await sb.from("vula_tenders")
-  .select("ocid,closes,sig:data->>waDocsSig,checked:data->>waDocsCheckedAt")
+  .select("ocid,closes,sig:data->>waDocsSig,checked:data->>waDocsCheckedAt,seen:data->>sourceObservedAt")
   .like("ocid", "wa-tenders-%").eq("status", "active").limit(1000);
 if (error) { warn("candidate query failed: " + error.message); process.exit(0); }
 const now = Date.now();
-const due = pickWaDue(cands, { now, limit: 1000 }).filter((r) => !r.checked || now - Date.parse(r.checked) > CHECK_MS);
-console.log(`WA docs: ${cands.length} open tenders, ${due.length} due a file-list check, download cap ${LIMIT}`);
+// Only tenders the latest scan still saw: rows the portal has dropped stay "active" in the table but return an empty page.
+const SEEN_MS = 3 * 864e5;
+const live = cands.filter((r) => r.seen && now - Date.parse(r.seen) < SEEN_MS);
+const due = pickWaDue(live, { now, limit: 1000 }).filter((r) => !r.checked || now - Date.parse(r.checked) > CHECK_MS);
+console.log(`WA docs: ${cands.length} active rows, ${live.length} seen in the last scan, ${due.length} due a file-list check, download cap ${LIMIT}`);
 if (!due.length) process.exit(0);
 
 const wa = new WaSession();
@@ -99,6 +102,8 @@ for (const r of due) {
   } catch (e) {
     stat.failed++;
     console.log(`WA docs: ${r.ocid} failed: ${e.message}`);
+    // stamp the check so a stubborn tender is retried after the normal interval, not on every run
+    if (!DRY && !/wa_session_lost|wa_login/.test(e.message)) await persist(r.ocid, (d) => ({ ...d, waDocsCheckedAt: new Date().toISOString(), waDocsError: String(e.message).slice(0, 60) })).catch(() => {});
     if (/wa_session_lost|wa_login/.test(e.message)) { warn("session lost, stopping"); break; }
     await sleep(2000);
   }
