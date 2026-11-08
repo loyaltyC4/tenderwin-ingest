@@ -91,10 +91,16 @@ async function main() {
   console.log(`upserted: ${upserted} | newly closed: ${closed}`);
   // Register/refresh this source's scan state so the site's freshness gate uses
   // nz-gets's own complete time (not the federal fallback, which can post-date us).
-  await sb.from("vula_tender_feed_state").upsert({
+  const fsr = await sb.from("vula_tender_feed_state").upsert({
     source: SOURCE, status: "complete",
     last_attempt_at: observed, last_success_at: observed, last_complete_started_at: observed,
   }, { onConflict: "source" });
-  console.log("feed state refreshed");
+  if (fsr.error) console.log("FEED STATE ERROR:", fsr.error.message.slice(0, 100));
+  else console.log("feed state refreshed");
+  // read-back verification: can this key see its own rows?
+  const { count } = await sb.from("vula_tenders").select("ocid", { count: "exact", head: true }).eq("data->>source", SOURCE);
+  console.log("read-back nz-gets row count:", count);
+  const { data: st } = await sb.from("vula_tender_feed_state").select("source,last_complete_started_at").eq("source", SOURCE).maybeSingle();
+  console.log("feed state row:", JSON.stringify(st));
 }
 main().catch(e => { console.error("FAIL", e.message); process.exit(1); });
