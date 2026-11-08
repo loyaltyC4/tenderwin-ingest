@@ -58,19 +58,14 @@ export function parseGetsFeed(xml, observedAt = new Date().toISOString()) {
 // ---------- detail enrichment (Phase 2) ----------
 const MONTHS = { january: 0, february: 1, march: 2, april: 3, may: 4, june: 5, july: 6, august: 7, september: 8, october: 9, november: 10, december: 11 };
 function parseNzDate(line) {
-  // "Monday, 31 December 2029 5:00 PM (Pacific/Auckland UTC+13:00)"
-  const m = line.match(/(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\s+(\d{1,2}):(\d{2})\s+(AM|PM)?/i);
-  const off = (line.match(/UTC([+-]\d{2}):(\d{2})/) || [])[0];
+  const m = line.match(/(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  const off = (line.match(/UTC([+-]\d{2}:\d{2})/) || [])[1];
   if (!m) return null;
   let h = parseInt(m[4], 10);
   if (m[6] && /pm/i.test(m[6]) && h < 12) h += 12;
   if (m[6] && /am/i.test(m[6]) && h === 12) h = 0;
   const dt = new Date(Date.UTC(parseInt(m[3], 10), MONTHS[m[2].toLowerCase()], parseInt(m[1], 10), h, parseInt(m[5], 10)));
-  if (off) {
-    const sign = off[3] === "-" ? -1 : 1;
-    const oh = parseInt(off.slice(4, 6), 10), om = parseInt(off.slice(7, 9), 10);
-    dt.setUTCMinutes(dt.getUTCMinutes() - sign * (oh * 60 + om));
-  }
+  if (off) { const sign = off[0] === "-" ? -1 : 1; const [oh, om] = off.slice(1).split(":").map(Number); dt.setUTCMinutes(dt.getUTCMinutes() - sign * (oh * 60 + om)); }
   return dt.toISOString();
 }
 function extractDetail(html) {
@@ -83,7 +78,8 @@ function extractDetail(html) {
     const l = lines[j];
     if (/^(RFx ID|Tender Name|Open Date|Close Date|Department\/Business Unit|Tender Type|Tender Coverage|Categories|Regions|Exemption Reason|Required Pre-qualifications)\b/.test(l) || l === "&nbsp;:" || l === ":") {
       const label = l.replace(/\s*&nbsp;:\s*$|\s*:\s*$/, "").trim();
-      const next = (lines[j + 1] || "").trim();
+      let next = (lines[j + 1] || "").trim();
+      if (!next || next === ":") next = (lines[j + 2] || "").trim();
       if (/^Open Date/i.test(l)) out.openDate = parseNzDate(next) || next;
       else if (/^Close Date/i.test(l)) out.closes = parseNzDate(next) || null;
       else if (/^Tender Type/i.test(l)) out.tenderType = next.slice(0, 60);
