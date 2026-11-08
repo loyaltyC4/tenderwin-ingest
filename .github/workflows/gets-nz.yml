@@ -1,0 +1,20 @@
+name: NZ GETS
+on:
+  schedule:
+    - cron: "25 1 * * *"   # daily, after the main AU ingest window
+  workflow_dispatch:
+concurrency: { group: gets-nz, cancel-in-progress: false }
+jobs:
+  gets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install --no-audit --no-fund
+      - name: Ingest NZ GETS feed
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/gets-ingest.mjs
