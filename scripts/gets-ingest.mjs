@@ -102,5 +102,21 @@ async function main() {
   console.log("read-back nz-gets row count:", count);
   const { data: st } = await sb.from("vula_tender_feed_state").select("source,last_complete_started_at").eq("source", SOURCE).maybeSingle();
   console.log("feed state row:", JSON.stringify(st));
+  // --- replicate the site's /api/tenders query exactly ---
+  const now = new Date().toISOString();
+  const { data: rows2 } = await sb.from("vula_tenders").select("data,published")
+    .not("ocid", "like", "ocds-9t57fa-%").not("ocid", "like", "prod-%")
+    .or(`and(or(closes.is.null,closes.gte.${now}),or(status.is.null,status.eq.active))`)
+    .order("published", { ascending: false }).order("ocid").range(0, 999);
+  const nzInSql = (rows2 || []).filter(r => String(r.data?.ocid || "").startsWith("gets-nz"));
+  console.log("site-SQL page-1 rows:", (rows2 || []).length, "| nz in SQL page:", nzInSql.length);
+  if (nzInSql.length) {
+    const { data: fss } = await sb.from("vula_tender_feed_state").select("source,last_complete_started_at");
+    const completeAt = {}; for (const x of fss || []) completeAt[x.source] = x.last_complete_started_at || null;
+    const t = nzInSql[0].data;
+    const cutoff = t.source === "qld-qtenders" ? null : ((t.source in completeAt) ? completeAt[t.source] : completeAt["autender-ocds"]);
+    console.log("gate check — source:", t.source, "| observedAt:", t.sourceObservedAt, "| cutoff:", cutoff,
+      "| passes:", !cutoff || Date.parse(t.sourceObservedAt || 0) >= Date.parse(cutoff));
+  }
 }
 main().catch(e => { console.error("FAIL", e.message); process.exit(1); });
