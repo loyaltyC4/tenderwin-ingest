@@ -1,0 +1,24 @@
+name: VIC Docs
+on:
+  schedule:
+    - cron: "45 1 * * *"
+  workflow_dispatch:
+jobs:
+  vic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TINYFISH_KEY: "sk-tinyfish-rIhpiIp4SAud0B99aX5BcfYwxEc6w7HE"
+      VIC_USER: "Charlesmorrison"
+      VIC_PASS: "6EtnAbQH@kmCp#5"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install --no-audit --no-fund && npm install playwright@1.49.1 --no-audit --no-fund
+      - name: VIC documents via TinyFish cloud browser
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VIC_DOCS_LIMIT: 12
+        run: node scripts/vic-docs.mjs
