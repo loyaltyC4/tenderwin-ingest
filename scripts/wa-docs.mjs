@@ -18,11 +18,34 @@ if (!E.SUPABASE_URL || !E.SUPABASE_SERVICE_ROLE_KEY) { warn("no Supabase credent
 if (!E.WA_USER || !E.WA_PASS || !E.GMAIL_USER || !E.GMAIL_APP_PASS) { warn("WA/Gmail secrets not set, skipping"); process.exit(0); }
 const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
+// Storage guard (free Supabase gives 1 GB per project). Files of tenders that closed or vanished are removed, and downloads stop
+// once the bucket passes WA_BUCKET_CAP_MB (default 880), so the cache can never fill the project and take the whole site down.
+const CAP_BYTES = Number(E.WA_BUCKET_CAP_MB || 880) * 1048576;
+let usedBytes = 0, prunedFiles = 0;
+try {
+  const bucket = sb.storage.from(WA_BUCKET);
+  const { data: folders } = await bucket.list("", { limit: 1000 });
+  const names = (folders || []).map((f) => f.name);
+  const { data: trows } = names.length ? await sb.from("vula_tenders").select("ocid,closes,status").in("ocid", names) : { data: [] };
+  const byId = new Map((trows || []).map((r) => [r.ocid, r]));
+  for (const f of folders || []) {
+    const t = byId.get(f.name);
+    const dead = !t || t.status !== "active" || (t.closes && Date.parse(t.closes) < Date.now() - 2 * 864e5);
+    const { data: files } = await bucket.list(f.name, { limit: 1000 });
+    if (!files?.length) continue;
+    if (dead && !DRY) { await bucket.remove(files.map((x) => `${f.name}/${x.name}`)); prunedFiles += files.length; continue; }
+    usedBytes += files.reduce((n, x) => n + (x.metadata?.size || 0), 0);
+  }
+  console.log(`WA docs storage: ${Math.round(usedBytes / 1048576)} MB kept, ${prunedFiles} file(s) of closed tenders removed, cap ${Math.round(CAP_BYTES / 1048576)} MB`);
+} catch (e) { console.log("::warning::WA docs storage guard failed: " + e.message); }
+
 const { data: cands, error } = await sb.from("vula_tenders")
   .select("ocid,closes,sig:data->>waDocsSig,checked:data->>waDocsCheckedAt,seen:data->>sourceObservedAt")
   .like("ocid", "wa-tenders-%").eq("status", "active").limit(1000);
 if (error) { warn("candidate query failed: " + error.message); process.exit(0); }
 const now = Date.now();
+const limitNow = usedBytes > CAP_BYTES ? 0 : LIMIT; // 0 = bucket is full: only refresh file lists, store nothing new
+if (!limitNow && LIMIT) console.log("::warning::WA docs: storage cap reached, not downloading new packs");
 // Only tenders the latest scan still saw: rows the portal has dropped stay "active" in the table but return an empty page.
 const SEEN_MS = 3 * 864e5;
 const live = cands.filter((r) => r.seen && now - Date.parse(r.seen) < SEEN_MS);
@@ -78,7 +101,7 @@ for (const r of due) {
       await sleep(700);
       continue;
     }
-    if (downloads >= LIMIT) { await sleep(400); continue; } // over the cap: left for the next run
+    if (downloads >= limitNow) { await sleep(400); continue; } // over the cap: left for the next run
     await sleep(1500);
     const zip = await wa.downloadZip(id);
     downloads++;
