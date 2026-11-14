@@ -13,7 +13,10 @@ import os from "node:os";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 const API = "https://qtenders.hpw.qld.gov.au/api/search/tenders";
-const PROJECT = "dtjydsaoatddghbuqlyv";
+// TenderWin lives in lwwahygviakbccwoqvfo (Sydney, "bidcheck AUS").
+// dtjydsaoatddghbuqlyv is the SOUTH AFRICAN project — writing there is what put AU/NZ
+// rows in the wrong database on 2026-11-14. Override only deliberately.
+const PROJECT = process.env.TW_PROJECT_ID || "lwwahygviakbccwoqvfo";
 const OCID_PREFIX = "ocds-qld-awards-";
 const SOURCE = "qld-qtenders-awards";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

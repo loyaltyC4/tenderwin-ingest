@@ -5,7 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 
 const OUT = process.env.OUT || "/tmp/boq-candidates.json";
-const PROJECT = "dtjydsaoatddghbuqlyv";
+// TenderWin lives in lwwahygviakbccwoqvfo (Sydney, "bidcheck AUS").
+// dtjydsaoatddghbuqlyv is the SOUTH AFRICAN project — writing there is what put AU/NZ
+// rows in the wrong database on 2026-11-14. Override only deliberately.
+const PROJECT = process.env.TW_PROJECT_ID || "lwwahygviakbccwoqvfo";
 const PAT = "(pricing schedule|price schedule|schedule of (prices|rates|quantities)|bill of quantities|boq|pricing form|price form|rates schedule|schedule of works)";
 const AU = ["vendorpanel-rss", "wa-tenders", "autender-atm", "nsw-etendering", "qld-qtenders",
   "vic-tendersearch", "tas-tenders", "nt-qtol", "act-tendersearch"];
