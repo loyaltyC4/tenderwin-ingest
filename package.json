@@ -12,6 +12,9 @@
   "dependencies": {
     "@supabase/supabase-js": "2.47.10",
     "fflate": "^0.8.2",
-    "unpdf": "1.8.1"
+    "libsodium-wrappers": "^0.8.4",
+    "playwright": "^1.65.0",
+    "unpdf": "1.8.1",
+    "xlsx": "^0.18.5"
   }
 }
