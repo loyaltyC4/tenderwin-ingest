@@ -22,7 +22,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node -e "import('./lib/tender-feed.js').then(async m => { const r = await m.runStatePortalsIngest({ force: true, only: ['wa-tenders'] }); console.log(JSON.stringify(r).slice(0, 600)); })"
+        run: |
+          node -e "import('./lib/tender-feed.js').then(async (m) => { const r = await m.runStatePortalsIngest({ force: true, only: ['wa-tenders'] }); console.log(JSON.stringify(r).slice(0, 600)); })"
       - name: Tenders WA documents
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
