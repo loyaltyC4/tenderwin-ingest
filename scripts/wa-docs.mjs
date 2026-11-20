@@ -1,5 +1,5 @@
 // Tenders WA documents: log in once, read each open tender's file list, download only packs that are new or
-// changed, store the files in a private Supabase Storage bucket and persist `docs` rows (waFile) on the tender.
+// changed, store the files in Cloudflare R2 (or the private Supabase bucket when R2 is not configured) and persist `docs` rows (waFile) on the tender.
 // Paced and capped: a handful of downloads per run, soonest-closing first. Never fails the workflow run.
 //
 // env: SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY WA_USER WA_PASS GMAIL_USER GMAIL_APP_PASS
@@ -8,6 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 import { unzipSync } from "fflate";
 import { WaSession, sleep } from "../lib/wa-session.mjs";
 import { mergeEnriched } from "../lib/enrich.mjs";
+import { r2Enabled, r2Put, r2List, r2Delete } from "../lib/r2.mjs";
 import { waViewId, waSignature, buildWaRows, waStorageKey, contentTypeFor, WA_BUCKET, MAX_FILE_BYTES, pickWaDue } from "../lib/wa-docs.mjs";
 
 const E = process.env;
@@ -20,23 +21,39 @@ const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_ROLE_KEY, { auth: { p
 
 // Storage guard (free Supabase gives 1 GB per project). Files of tenders that closed or vanished are removed, and downloads stop
 // once the bucket passes WA_BUCKET_CAP_MB (default 880), so the cache can never fill the project and take the whole site down.
-const CAP_BYTES = Number(E.WA_BUCKET_CAP_MB || 880) * 1048576;
+const R2 = r2Enabled(); // documents live in Cloudflare R2 (10 GB free, no egress) when configured, else the Supabase bucket
+const CAP_BYTES = Number(E.WA_BUCKET_CAP_MB || (R2 ? 3000 : 880)) * 1048576;
 let usedBytes = 0, prunedFiles = 0;
 try {
-  const bucket = sb.storage.from(WA_BUCKET);
-  const { data: folders } = await bucket.list("", { limit: 1000 });
-  const names = (folders || []).map((f) => f.name);
-  const { data: trows } = names.length ? await sb.from("vula_tenders").select("ocid,closes,status").in("ocid", names) : { data: [] };
-  const byId = new Map((trows || []).map((r) => [r.ocid, r]));
-  for (const f of folders || []) {
-    const t = byId.get(f.name);
-    const dead = !t || t.status !== "active" || (t.closes && Date.parse(t.closes) < Date.now() - 2 * 864e5);
-    const { data: files } = await bucket.list(f.name, { limit: 1000 });
-    if (!files?.length) continue;
-    if (dead && !DRY) { await bucket.remove(files.map((x) => `${f.name}/${x.name}`)); prunedFiles += files.length; continue; }
-    usedBytes += files.reduce((n, x) => n + (x.metadata?.size || 0), 0);
+  if (R2) {
+    const objs = await r2List("wa/");
+    const byTender = new Map();
+    for (const o of objs) { const id = o.key.split("/")[1]; (byTender.get(id) || byTender.set(id, []).get(id)).push(o); }
+    const ids = [...byTender.keys()];
+    const { data: trows } = ids.length ? await sb.from("vula_tenders").select("ocid,closes,status").in("ocid", ids) : { data: [] };
+    const byId = new Map((trows || []).map((r) => [r.ocid, r]));
+    for (const [id, files] of byTender) {
+      const t = byId.get(id);
+      const dead = !t || t.status !== "active" || (t.closes && Date.parse(t.closes) < Date.now() - 2 * 864e5);
+      if (dead && !DRY) { for (const f of files) await r2Delete(f.key); prunedFiles += files.length; continue; }
+      usedBytes += files.reduce((n, x) => n + (x.size || 0), 0);
+    }
+  } else {
+    const bucket = sb.storage.from(WA_BUCKET);
+    const { data: folders } = await bucket.list("", { limit: 1000 });
+    const names = (folders || []).map((f) => f.name);
+    const { data: trows } = names.length ? await sb.from("vula_tenders").select("ocid,closes,status").in("ocid", names) : { data: [] };
+    const byId = new Map((trows || []).map((r) => [r.ocid, r]));
+    for (const f of folders || []) {
+      const t = byId.get(f.name);
+      const dead = !t || t.status !== "active" || (t.closes && Date.parse(t.closes) < Date.now() - 2 * 864e5);
+      const { data: files } = await bucket.list(f.name, { limit: 1000 });
+      if (!files?.length) continue;
+      if (dead && !DRY) { await bucket.remove(files.map((x) => `${f.name}/${x.name}`)); prunedFiles += files.length; continue; }
+      usedBytes += files.reduce((n, x) => n + (x.metadata?.size || 0), 0);
+    }
   }
-  console.log(`WA docs storage: ${Math.round(usedBytes / 1048576)} MB kept, ${prunedFiles} file(s) of closed tenders removed, cap ${Math.round(CAP_BYTES / 1048576)} MB`);
+  console.log(`WA docs storage (${R2 ? "R2" : "Supabase"}): ${Math.round(usedBytes / 1048576)} MB kept, ${prunedFiles} file(s) of closed tenders removed, cap ${Math.round(CAP_BYTES / 1048576)} MB`);
 } catch (e) { console.log("::warning::WA docs storage guard failed: " + e.message); }
 
 const { data: cands, error } = await sb.from("vula_tenders")
@@ -70,7 +87,7 @@ for (let attempt = 1; attempt <= 3 && !loggedIn; attempt++) {
 if (!loggedIn) { warn("login failed after retries"); process.exit(0); }
 console.log("WA docs: logged in");
 
-if (!DRY) { const { error: be } = await sb.storage.createBucket(WA_BUCKET, { public: false }); if (be && !/already exists|duplicate/i.test(be.message)) warn("bucket: " + be.message); }
+if (!DRY && !R2) { const { error: be } = await sb.storage.createBucket(WA_BUCKET, { public: false }); if (be && !/already exists|duplicate/i.test(be.message)) warn("bucket: " + be.message); }
 
 // optimistic read-modify-write, never bumps updated_at (it means "last scan")
 async function persist(ocid, build) {
@@ -116,15 +133,18 @@ for (const r of due) {
       if (bytes.length > MAX_FILE_BYTES) { stat.skippedBig++; continue; }
       const key = waStorageKey(r.ocid, stored.length, f.name);
       if (!DRY) {
-        const { error: ue } = await sb.storage.from(WA_BUCKET).upload(key, bytes, { contentType: contentTypeFor(f.name), upsert: true });
-        if (ue) throw new Error("upload: " + ue.message);
+        if (R2) await r2Put("wa/" + key, bytes, contentTypeFor(f.name));
+        else {
+          const { error: ue } = await sb.storage.from(WA_BUCKET).upload(key, bytes, { contentType: contentTypeFor(f.name), upsert: true });
+          if (ue) throw new Error("upload: " + ue.message);
+        }
       }
       stored.push({ name: f.name, key, size: bytes.length, ver: f.ver });
     }
     if (!stored.length) throw new Error("no files in zip");
     if (!DRY) {
       const ok = await persist(r.ocid, (d) => {
-        const rows = buildWaRows(stored, d.sourceDetailUrl);
+        const rows = buildWaRows(stored, d.sourceDetailUrl, R2 ? "r2" : "");
         const m = mergeEnriched({ docs: rows, contact: d.contact }, d, stamp);
         return { ...d, docs: rows, addendum: m.addendum, docsFetchedAt: stamp, docsFetchedCount: rows.length, waDocsSig: sig, waDocsCheckedAt: stamp };
       });
