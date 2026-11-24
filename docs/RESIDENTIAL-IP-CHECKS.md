@@ -10,6 +10,7 @@ Goal: documents for WA, VIC and ACT tenders (about 200 open tenders have none). 
 | WA | 200 from a home IP | behind a supplier login + email code | GitHub runner IPs get 403 |
 | VIC | open | behind a login | login fails in the runner (needs a working VIC account) |
 | ACT | 403 from plain requests | public downloads | Cloudflare JavaScript challenge on every request |
+| Static AU proxy (Vocus, Melbourne, SOCKS5) | works for normal sites | not usable | SOCKS reply 2 "not allowed by ruleset" for every .gov.au host (tested 2026-11-22) |
 | DataImpulse proxy | works for normal sites, AU IP | not usable | answers `403 SITE_PERMANENTLY_BLOCKED` for every .gov.au host |
 
 So the problem is two different things: WA is an IP problem, ACT is a bot-check problem, VIC is a missing account.
