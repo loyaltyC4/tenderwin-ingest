@@ -58,7 +58,14 @@ try {
   await p.waitForTimeout(1500);
   await p.fill('input[name="username"], #username', E.VIC_USER).catch(() => {});
   await p.fill('input[type="password"], input[name="password"]', E.VIC_PASS).catch(() => {});
-  await p.evaluate(() => { const e = Array.from(document.querySelectorAll("button,input[type=submit]")).find(x => /log ?in/i.test((x.textContent || x.value || ""))); if (e) e.click(); });
+  // Submit the supplier form itself. The page also has a "Log In" link in the header and a second (buyer) form, so
+  // matching a button by its text clicked the wrong thing once the site added them (login stayed on /login/).
+  await p.evaluate(() => {
+    const pw = document.querySelector('input[type="password"]');
+    const f = pw && pw.closest("form");
+    const b = f && (f.querySelector('button[type="submit"], input[type="submit"]') || Array.from(f.querySelectorAll("button")).find((x) => /sign ?in|log ?in/i.test(x.textContent || "")));
+    if (b) b.click(); else if (f) f.requestSubmit();
+  });
   await p.waitForTimeout(7000);
   const body1 = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 200));
   if (!/Charles Morrison|log\s?out/i.test(body1)) { const full = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ")).catch(() => "");
