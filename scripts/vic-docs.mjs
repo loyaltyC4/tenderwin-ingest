@@ -61,7 +61,7 @@ try {
   await p.evaluate(() => { const e = Array.from(document.querySelectorAll("button,input[type=submit]")).find(x => /log ?in/i.test((x.textContent || x.value || ""))); if (e) e.click(); });
   await p.waitForTimeout(7000);
   const body1 = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 200));
-  if (!/Charles Morrison|log\s?out/i.test(body1)) throw new Error("vic_login_failed");
+  if (!/Charles Morrison|log\s?out/i.test(body1)) { console.log(`VIC login page said: [${String(p.url()).slice(0, 80)}] ${body1.replace(/[^\x20-\x7E]/g, "").slice(0, 160)}`); throw new Error("vic_login_failed"); }
   console.log("VIC logged in");
 
   let stored = 0, packs = 0, skippedNoDocs = 0;
