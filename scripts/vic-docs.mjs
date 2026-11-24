@@ -16,11 +16,12 @@ import { vicViewId, vicSignature, buildVicRows, vicStorageKey, contentTypeFor, V
 import { mergeEnriched } from "../lib/enrich.mjs";
 
 const E = process.env;
+const LOCAL = E.VIC_LOCAL === "1"; // 1 = real Chrome on this machine (home connection) instead of the TinyFish cloud browser
 const LIMIT = Number(E.VIC_DOCS_LIMIT || 12), CHECK_MS = Number(E.VIC_CHECK_HOURS || 20) * 3600e3, DRY = E.VIC_DRY === "1";
 const BUDGET_MS = Number(E.VIC_BUDGET_MIN || 12) * 60e3, started = Date.now();
 const warn = (m) => console.log(`::warning::VIC docs: ${m}`);
 if (!E.SUPABASE_URL || !E.SUPABASE_SERVICE_ROLE_KEY) { warn("no Supabase credentials"); process.exit(0); }
-if (!E.TINYFISH_KEY || !E.VIC_USER || !E.VIC_PASS) { warn("TinyFish/VIC secrets not set, skipping"); process.exit(0); }
+if ((!LOCAL && !E.TINYFISH_KEY) || !E.VIC_USER || !E.VIC_PASS) { warn("TinyFish/VIC secrets not set, skipping"); process.exit(0); }
 const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
 const { data: cands, error } = await sb.from("vula_tenders")
@@ -36,21 +37,26 @@ console.log(`VIC docs: ${cands.length} active rows, ${live.length} seen in the l
 const queue = due.slice(0, LIMIT);
 if (!queue.length) process.exit(0);
 
-// ---- TinyFish cloud browser session ----
-const sessRes = await fetch("https://api.browser.tinyfish.ai", {
-  method: "POST",
-  headers: { "X-API-Key": E.TINYFISH_KEY, "content-type": "application/json" },
-  body: JSON.stringify({}),
-});
-if (!sessRes.ok) { warn("tinyfish session failed: " + sessRes.status); process.exit(0); }
-const sess = await sessRes.json();
-console.log(`tinyfish session: ${sess.session_id}`);
+// ---- browser session: TinyFish cloud browser, or (VIC_LOCAL=1) real Chrome on this machine ----
+let sess = null;
+if (!LOCAL) {
+  const sessRes = await fetch("https://api.browser.tinyfish.ai", {
+    method: "POST",
+    headers: { "X-API-Key": E.TINYFISH_KEY, "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!sessRes.ok) { warn("tinyfish session failed: " + sessRes.status); process.exit(0); }
+  sess = await sessRes.json();
+  console.log(`tinyfish session: ${sess.session_id}`);
+} else console.log("VIC docs: using local Chrome");
 const deadline = Date.now() + BUDGET_MS;
 
 try {
-  const browser = await chromium.connectOverCDP(sess.cdp_url, { timeout: 90000 });
-  const ctx = browser.contexts()[0];
-  const p = ctx.pages()[0] || await ctx.newPage();
+  const browser = LOCAL
+    ? await chromium.launch({ channel: "chrome", headless: false, args: ["--disable-blink-features=AutomationControlled", "--window-position=-2400,0"] })
+    : await chromium.connectOverCDP(sess.cdp_url, { timeout: 90000 });
+  const ctx = LOCAL ? await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-AU", timezoneId: "Australia/Melbourne" }) : browser.contexts()[0];
+  const p = LOCAL ? await ctx.newPage() : (ctx.pages()[0] || await ctx.newPage());
 
   // login
   await p.goto("https://www.tenders.vic.gov.au/login/", { timeout: 90000, waitUntil: "load" }).catch(() => {});
@@ -140,6 +146,6 @@ try {
   }
   console.log(`VIC done: ${packs} packs, ${stored} files stored`);
 } finally {
-  try { await fetch(`https://api.browser.tinyfish.ai/${sess.session_id}`, { method: "DELETE", headers: { "X-API-Key": E.TINYFISH_KEY } }); } catch {}
+  try { if (sess) await fetch(`https://api.browser.tinyfish.ai/${sess.session_id}`, { method: "DELETE", headers: { "X-API-Key": E.TINYFISH_KEY } }); } catch {}
 }
 process.exit(0);

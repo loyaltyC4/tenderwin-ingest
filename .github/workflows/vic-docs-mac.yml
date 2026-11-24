@@ -1,0 +1,27 @@
+name: VIC documents (Mac runner)
+# VIC's Cloudflare blocks datacentre and cloud-browser IPs on login. This job runs on the owner's Mac (a home
+# connection, real Chrome). Scheduled and manual runs only: never on pull requests (personal machine).
+on:
+  schedule:
+    - cron: "20 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      vic_docs_limit: { description: "Max document packs to download this run", default: "12" }
+concurrency: { group: vic-docs-mac, cancel-in-progress: false }
+jobs:
+  vic:
+    if: github.repository == 'loyaltyC4/tenderwin-ingest'
+    runs-on: [self-hosted, mac-au-wa]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install --no-audit --no-fund && npm install playwright@1.49.1 --no-audit --no-fund
+      - name: VIC documents (home IP, real Chrome)
+        env:
+          VIC_LOCAL: "1"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VIC_USER: ${{ secrets.VIC_USER }}
+          VIC_PASS: ${{ secrets.VIC_PASS }}
+          VIC_DOCS_LIMIT: ${{ github.event.inputs.vic_docs_limit || '12' }}
+        run: node scripts/vic-docs.mjs
