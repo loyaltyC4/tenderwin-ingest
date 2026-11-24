@@ -2,8 +2,8 @@ name: VIC documents (Mac runner)
 # VIC's Cloudflare blocks datacentre and cloud-browser IPs on login. This job runs on the owner's Mac (a home
 # connection, real Chrome). Scheduled and manual runs only: never on pull requests (personal machine).
 on:
-  schedule:
-    - cron: "20 */4 * * *"
+  # No schedule yet: from the home IP VIC's Cloudflare still answered "Sorry, you have been blocked" on 2026-11-24, so
+  # repeated automatic logins would only risk locking the account. Run by hand to re-test.
   workflow_dispatch:
     inputs:
       vic_docs_limit: { description: "Max document packs to download this run", default: "12" }

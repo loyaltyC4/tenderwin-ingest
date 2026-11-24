@@ -15,6 +15,11 @@ Goal: documents for WA, VIC and ACT tenders (about 200 open tenders have none). 
 
 So the problem is two different things: WA is an IP problem, ACT is a bot-check problem, VIC is a missing account.
 
+## Findings 2026-11-24
+- **WA:** the Mac runner logs in fine up to the password check; the portal answers "Username or password incorrect". The stored `WA_USER`/`WA_PASS` secrets are wrong or changed. Fix: confirm the login works at tenders.wa.gov.au, then `gh secret set WA_PASS --repo loyaltyC4/tenderwin-ingest`.
+- **VIC:** the login form was being submitted by clicking the header "Log In" link (two login forms on the page); fixed. After that, both the TinyFish cloud browser and real Chrome on the home IP get Cloudflare's "Sorry, you have been blocked" on consolidatedtenders.com. `vic-docs-mac.yml` has no schedule for that reason.
+- The VIC password and TinyFish key were hard-coded in `vic-docs.yml` in this PUBLIC repo; they now come from GitHub secrets, but they must still be rotated.
+
 ## Check 1: is it the IP? (2 minutes, run on your Mac)
 
 ```bash
