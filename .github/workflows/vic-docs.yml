@@ -8,9 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TINYFISH_KEY: "sk-tinyfish-rIhpiIp4SAud0B99aX5BcfYwxEc6w7HE"
-      VIC_USER: "Charlesmorrison"
-      VIC_PASS: "6EtnAbQH@kmCp#5"
+      TINYFISH_KEY: ${{ secrets.TINYFISH_KEY }}
+      VIC_USER: ${{ secrets.VIC_USER }}
+      VIC_PASS: ${{ secrets.VIC_PASS }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
