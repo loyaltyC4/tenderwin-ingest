@@ -61,7 +61,9 @@ try {
   await p.evaluate(() => { const e = Array.from(document.querySelectorAll("button,input[type=submit]")).find(x => /log ?in/i.test((x.textContent || x.value || ""))); if (e) e.click(); });
   await p.waitForTimeout(7000);
   const body1 = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 200));
-  if (!/Charles Morrison|log\s?out/i.test(body1)) { console.log(`VIC login page said: [${String(p.url()).slice(0, 80)}] ${body1.replace(/[^\x20-\x7E]/g, "").slice(0, 160)}`); throw new Error("vic_login_failed"); }
+  if (!/Charles Morrison|log\s?out/i.test(body1)) { const full = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ")).catch(() => "");
+      const hit = (full.match(/[^.]{0,80}(incorrect|invalid|locked|disabled|captcha|verify|verification|expired|too many|not recognised|try again)[^.]{0,100}/ig) || []).slice(0, 4).join(" | ");
+      console.log(`VIC login page said: [${String(p.url()).slice(0, 80)}] errors: ${hit.replace(/[^\x20-\x7E]/g, "").slice(0, 400) || "none found"} | form: ${await p.evaluate(() => Array.from(document.querySelectorAll("input")).map((i) => i.type + ":" + (i.name || i.id)).join(",")).catch(() => "")}`); throw new Error("vic_login_failed"); }
   console.log("VIC logged in");
 
   let stored = 0, packs = 0, skippedNoDocs = 0;
