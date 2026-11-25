@@ -71,10 +71,11 @@ const deadline = Date.now() + BUDGET_MS;
 
 try {
   const launchArgs = ["--disable-blink-features=AutomationControlled", "--window-position=-2400,0"];
-  const browser = LOCAL && !PROFILE
+  const CDP = E.VIC_CDP || ""; // attach to the long-lived signed-in Chrome (launchd keeps it open): its session cookies live as long as it does
+  const browser = CDP ? await chromium.connectOverCDP(CDP, { timeout: 30000 }) : LOCAL && !PROFILE
     ? await chromium.launch({ channel: "chrome", headless: false, args: launchArgs })
     : LOCAL ? null : await chromium.connectOverCDP(sess.cdp_url, { timeout: 90000 });
-  const ctx = LOCAL && PROFILE
+  const ctx = CDP ? browser.contexts()[0] : LOCAL && PROFILE
     ? await chromium.launchPersistentContext(PROFILE, { channel: "chrome", headless: false, args: launchArgs, viewport: { width: 1280, height: 900 }, locale: "en-AU", timezoneId: "Australia/Melbourne" })
     : LOCAL ? await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-AU", timezoneId: "Australia/Melbourne" }) : browser.contexts()[0];
   const p = LOCAL ? await ctx.newPage() : (ctx.pages()[0] || await ctx.newPage());
