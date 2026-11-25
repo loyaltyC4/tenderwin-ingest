@@ -4,8 +4,8 @@ name: VIC documents (Mac runner)
 on:
   # Paced: one login every 4 hours (6 a day), at most 8 packs per run and 48 a day (VIC_DAILY_PACKS), 45-90 s between
   # packs. A failed login locks the job for 24 h (state in R2), so a Cloudflare block never turns into repeated logins.
-  schedule:
-    - cron: "20 */4 * * *"
+  # SCHEDULE OFF 2026-11-25: the Playwright-launched Chrome is still blocked at login by Cloudflare, so a cron would only
+  # retry the block. Re-enable (cron "20 */4 * * *") once login works from the Mac.
   workflow_dispatch:
     inputs:
       vic_docs_limit: { description: "Max document packs to download this run", default: "8" }
