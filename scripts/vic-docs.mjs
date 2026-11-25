@@ -22,9 +22,15 @@ const LIMIT = Number(E.VIC_DOCS_LIMIT || 12), CHECK_MS = Number(E.VIC_CHECK_HOUR
 const BUDGET_MS = Number(E.VIC_BUDGET_MIN || 12) * 60e3, started = Date.now();
 const R2 = r2Enabled(); // files go to Cloudflare R2 (like WA) when configured, so the 1 GB Supabase storage is not used
 const DAILY_CAP = Number(E.VIC_DAILY_PACKS || 48);
+// Human hours only: Melbourne 07:00-19:00, Monday to Saturday (VIC_ANYTIME=1 overrides for a manual run).
+if (E.VIC_ANYTIME !== "1") {
+  const mel = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Melbourne" }));
+  if (mel.getHours() < 7 || mel.getHours() >= 19 || mel.getDay() === 0) { console.log("VIC docs: outside human hours (Melbourne 07-19, Mon-Sat), skipping"); process.exit(0); }
+}
+const PROFILE = E.VIC_PROFILE_DIR || ""; // a dedicated Chrome profile that stays logged in: the session and Cloudflare clearance persist, so no repeated logins
 const warn = (m) => console.log(`::warning::VIC docs: ${m}`);
 if (!E.SUPABASE_URL || !E.SUPABASE_SERVICE_ROLE_KEY) { warn("no Supabase credentials"); process.exit(0); }
-if ((!LOCAL && !E.TINYFISH_KEY) || !E.VIC_USER || !E.VIC_PASS) { warn("TinyFish/VIC secrets not set, skipping"); process.exit(0); }
+if ((!LOCAL && !E.TINYFISH_KEY) || ((!LOCAL || E.VIC_AUTOLOGIN === "1") && (!E.VIC_USER || !E.VIC_PASS))) { warn("TinyFish/VIC secrets not set, skipping"); process.exit(0); }
 const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
 // Pacing guards so VIC never sees a burst: a lock after a failed login (24 h), and a rolling daily pack cap.
@@ -64,13 +70,26 @@ if (!LOCAL) {
 const deadline = Date.now() + BUDGET_MS;
 
 try {
-  const browser = LOCAL
-    ? await chromium.launch({ channel: "chrome", headless: false, args: ["--disable-blink-features=AutomationControlled", "--window-position=-2400,0"] })
-    : await chromium.connectOverCDP(sess.cdp_url, { timeout: 90000 });
-  const ctx = LOCAL ? await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-AU", timezoneId: "Australia/Melbourne" }) : browser.contexts()[0];
+  const launchArgs = ["--disable-blink-features=AutomationControlled", "--window-position=-2400,0"];
+  const browser = LOCAL && !PROFILE
+    ? await chromium.launch({ channel: "chrome", headless: false, args: launchArgs })
+    : LOCAL ? null : await chromium.connectOverCDP(sess.cdp_url, { timeout: 90000 });
+  const ctx = LOCAL && PROFILE
+    ? await chromium.launchPersistentContext(PROFILE, { channel: "chrome", headless: false, args: launchArgs, viewport: { width: 1280, height: 900 }, locale: "en-AU", timezoneId: "Australia/Melbourne" })
+    : LOCAL ? await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-AU", timezoneId: "Australia/Melbourne" }) : browser.contexts()[0];
   const p = LOCAL ? await ctx.newPage() : (ctx.pages()[0] || await ctx.newPage());
 
-  // login
+  // Is this profile already signed in? Look before logging in: a valid session means zero logins.
+  const bodyText = () => p.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 1500)).catch(() => "");
+  await p.goto("https://www.tenders.vic.gov.au/", { timeout: 90000, waitUntil: "load" }).catch(() => {});
+  for (let i = 0; i < 12; i++) { await p.waitForTimeout(2500); const t = await p.title().catch(() => ""); if (!/just a moment|attention required/i.test(t)) break; }
+  await p.waitForTimeout(1500);
+  let signedIn = /Charles Morrison|log\s?out|sign\s?out/i.test(await bodyText());
+  if (/you have been blocked/i.test(await bodyText())) { state.lockUntil = Date.now() + 24 * 3600e3; await saveState(); warn("blocked by Cloudflare, locked for 24 h"); process.exit(0); }
+  if (signedIn) console.log("VIC session still signed in, no login needed");
+  else if (E.VIC_AUTOLOGIN !== "1") { warn("VIC session expired: open the profile once, sign in, and the job resumes (no automatic login attempted)"); process.exit(0); }
+  if (!signedIn) {
+  // login (only with VIC_AUTOLOGIN=1)
   await p.goto("https://www.tenders.vic.gov.au/login/", { timeout: 90000, waitUntil: "load" }).catch(() => {});
   for (let i = 0; i < 12; i++) { await p.waitForTimeout(2500); const t = await p.title().catch(() => ""); if (!/just a moment|attention required/i.test(t)) break; }
   await p.waitForTimeout(1500);
@@ -90,6 +109,7 @@ try {
       const hit = (full.match(/[^.]{0,80}(incorrect|invalid|locked|disabled|captcha|verify|verification|expired|too many|not recognised|try again)[^.]{0,100}/ig) || []).slice(0, 4).join(" | ");
       console.log(`VIC login page said: [${String(p.url()).slice(0, 80)}] errors: ${hit.replace(/[^\x20-\x7E]/g, "").slice(0, 400) || "none found"} | form: ${await p.evaluate(() => Array.from(document.querySelectorAll("input")).map((i) => i.type + ":" + (i.name || i.id)).join(",")).catch(() => "")}`); state.lockUntil = Date.now() + 24 * 3600e3; await saveState(); throw new Error("vic_login_failed"); }
   console.log("VIC logged in");
+  }
 
   let stored = 0, packs = 0, skippedNoDocs = 0;
   for (const t of queue) {
@@ -100,6 +120,7 @@ try {
       // load the pack form (challenge auto-passes in the cloud browser)
       await p.goto(`https://www.tenders.vic.gov.au/secure/tender/downloadSpecDocs?tenderId=${id}&method=downloadViaHTML`, { timeout: 90000, waitUntil: "load" }).catch(() => {});
       await p.waitForTimeout(6000);
+      if (/you have been blocked|verify you are human/i.test(await bodyText())) { state.lockUntil = Date.now() + 24 * 3600e3; await saveState(); warn("blocked mid-run, stopping and locking for 24 h"); break; }
       const boxInfo = await p.evaluate(() => Array.from(document.querySelectorAll('#spec input[name="ids[]"]')).map((c) => ({ v: c.value, label: (c.closest("label") || c.parentElement || { textContent: "" }).textContent.replace(/\s+/g, " ").trim().slice(0, 120) })));
       if (!boxInfo.length) { console.log(`${t.ocid}: no pack form (no docs)`); skippedNoDocs++; continue; }
       console.log(`${t.ocid}: ${boxInfo.length} files on the form`);
