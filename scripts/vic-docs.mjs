@@ -14,16 +14,28 @@ import { chromium } from "playwright";
 import { unzipSync } from "fflate";
 import { vicViewId, vicSignature, buildVicRows, vicStorageKey, contentTypeFor, VIC_BUCKET, MAX_FILE_BYTES, pickVicDue } from "../lib/vic-docs.mjs";
 import { mergeEnriched } from "../lib/enrich.mjs";
+import { r2Enabled, r2Put, r2Get } from "../lib/r2.mjs";
 
 const E = process.env;
 const LOCAL = E.VIC_LOCAL === "1"; // 1 = real Chrome on this machine (home connection) instead of the TinyFish cloud browser
 const LIMIT = Number(E.VIC_DOCS_LIMIT || 12), CHECK_MS = Number(E.VIC_CHECK_HOURS || 20) * 3600e3, DRY = E.VIC_DRY === "1";
 const BUDGET_MS = Number(E.VIC_BUDGET_MIN || 12) * 60e3, started = Date.now();
+const R2 = r2Enabled(); // files go to Cloudflare R2 (like WA) when configured, so the 1 GB Supabase storage is not used
+const DAILY_CAP = Number(E.VIC_DAILY_PACKS || 48);
 const warn = (m) => console.log(`::warning::VIC docs: ${m}`);
 if (!E.SUPABASE_URL || !E.SUPABASE_SERVICE_ROLE_KEY) { warn("no Supabase credentials"); process.exit(0); }
 if ((!LOCAL && !E.TINYFISH_KEY) || !E.VIC_USER || !E.VIC_PASS) { warn("TinyFish/VIC secrets not set, skipping"); process.exit(0); }
 const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
+// Pacing guards so VIC never sees a burst: a lock after a failed login (24 h), and a rolling daily pack cap.
+const dayKey = "vic/_state.json";
+let state = { lockUntil: 0, day: "", packs: 0 };
+if (R2) { try { const r = await r2Get(dayKey, AbortSignal.timeout(15000)); if (r.ok) state = { ...state, ...(await r.json()) }; } catch {} }
+const today = new Date().toISOString().slice(0, 10);
+if (state.day !== today) state = { ...state, day: today, packs: 0 };
+const saveState = async () => { if (R2 && !DRY) { try { await r2Put(dayKey, Buffer.from(JSON.stringify(state)), "application/json"); } catch {} } };
+if (Date.now() < state.lockUntil) { warn(`login lock active until ${new Date(state.lockUntil).toISOString()}, skipping`); process.exit(0); }
+if (state.packs >= DAILY_CAP) { console.log(`VIC docs: daily cap ${DAILY_CAP} packs reached, skipping`); process.exit(0); }
 const { data: cands, error } = await sb.from("vula_tenders")
   .select("ocid,closes,data").like("ocid", "vic-tendersearch-%").eq("status", "active").limit(1000);
 if (error) { warn("candidate query failed: " + error.message); process.exit(0); }
@@ -34,7 +46,7 @@ const due = pickVicDue(live.map((r) => ({ ocid: r.ocid, closes: r.closes, data: 
   .filter((r) => { const c = Number(r.data?.vicDocsCheckedAt || 0); return !c || now - c > CHECK_MS; })
   .filter((r) => !(r.data?.docs || []).some((d) => d.vicFile));
 console.log(`VIC docs: ${cands.length} active rows, ${live.length} seen in the last scan, ${due.length} due a pack download, cap ${LIMIT}`);
-const queue = due.slice(0, LIMIT);
+const queue = due.slice(0, Math.min(LIMIT, DAILY_CAP - state.packs));
 if (!queue.length) process.exit(0);
 
 // ---- browser session: TinyFish cloud browser, or (VIC_LOCAL=1) real Chrome on this machine ----
@@ -76,7 +88,7 @@ try {
   const body1 = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 200));
   if (!/Charles Morrison|log\s?out/i.test(body1)) { const full = await p.evaluate(() => document.body.innerText.replace(/\s+/g, " ")).catch(() => "");
       const hit = (full.match(/[^.]{0,80}(incorrect|invalid|locked|disabled|captcha|verify|verification|expired|too many|not recognised|try again)[^.]{0,100}/ig) || []).slice(0, 4).join(" | ");
-      console.log(`VIC login page said: [${String(p.url()).slice(0, 80)}] errors: ${hit.replace(/[^\x20-\x7E]/g, "").slice(0, 400) || "none found"} | form: ${await p.evaluate(() => Array.from(document.querySelectorAll("input")).map((i) => i.type + ":" + (i.name || i.id)).join(",")).catch(() => "")}`); throw new Error("vic_login_failed"); }
+      console.log(`VIC login page said: [${String(p.url()).slice(0, 80)}] errors: ${hit.replace(/[^\x20-\x7E]/g, "").slice(0, 400) || "none found"} | form: ${await p.evaluate(() => Array.from(document.querySelectorAll("input")).map((i) => i.type + ":" + (i.name || i.id)).join(",")).catch(() => "")}`); state.lockUntil = Date.now() + 24 * 3600e3; await saveState(); throw new Error("vic_login_failed"); }
   console.log("VIC logged in");
 
   let stored = 0, packs = 0, skippedNoDocs = 0;
@@ -115,8 +127,8 @@ try {
       const files = unzipSync(captured);
       const names = Object.keys(files).filter((n) => !n.endsWith("/"));
       if (DRY) { console.log(`${t.ocid}: DRY — ${names.length} files would be stored`); continue; }
-      const { error: be } = await sb.storage.createBucket(VIC_BUCKET, { public: false });
-      if (be && !/already exists|duplicate/i.test(be.message)) warn("bucket: " + be.message);
+      if (!R2) { const { error: be } = await sb.storage.createBucket(VIC_BUCKET, { public: false });
+        if (be && !/already exists|duplicate/i.test(be.message)) warn("bucket: " + be.message); }
 
       // optimistic read-modify-write, never bumps updated_at
       let persisted = false;
@@ -129,20 +141,22 @@ try {
           const name = names[fi].split("/").pop();
           const key = vicStorageKey(t.ocid, fi, name);
           const bytes = files[names[fi]];
-          const { error: ue } = await sb.storage.from(VIC_BUCKET).upload(key, bytes, { contentType: contentTypeFor(name), upsert: true });
+          let ue = null;
+          if (R2) { try { await r2Put("vic/" + key, Buffer.from(bytes), contentTypeFor(name)); } catch (e) { ue = e; } }
+          else ({ error: ue } = await sb.storage.from(VIC_BUCKET).upload(key, bytes, { contentType: contentTypeFor(name), upsert: true }));
           if (ue) { console.log("  upload err:", String(ue.message).slice(0, 60)); continue; }
-          storedDocs.push({ title: name.replace(/\.[a-z0-9]{2,4}$/i, ""), url: base.sourceDetailUrl || `https://www.tenders.vic.gov.au/tender/view?id=${id}`, format: (name.match(/\.([a-z0-9]{2,4})$/i) || [])[1]?.toUpperCase().slice(0, 4) || "FILE", type: "Tender document (public)", vicFile: key, vicName: name });
+          storedDocs.push({ title: name.replace(/\.[a-z0-9]{2,4}$/i, ""), url: base.sourceDetailUrl || `https://www.tenders.vic.gov.au/tender/view?id=${id}`, format: (name.match(/\.([a-z0-9]{2,4})$/i) || [])[1]?.toUpperCase().slice(0, 4) || "FILE", type: "Tender document (public)", vicFile: key, vicName: name, ...(R2 ? { vicStore: "r2" } : {}) });
         }
         if (!storedDocs.length) break;
         const next = mergeEnriched({ docs: storedDocs.map((d) => ({ ...d, vicFile: d.vicFile })) }, base, new Date().toISOString());
         const nextData = { ...base, docs: next.docs, contact: next.contact, addendum: next.addendum, timeline: next.timeline, vicDocsCheckedAt: new Date().toISOString(), vicDocsSig: vicSignature(storedDocs.map((d) => ({ name: d.vicName, size: d.vicSize }))) };
         const { data: hit, error: ue2 } = await sb.from("vula_tenders").update({ data: nextData }).eq("ocid", t.ocid).eq("updated_at", row.updated_at).select("ocid");
-        if (!ue2 && hit?.length) { persisted = true; stored += storedDocs.length; packs++; break; }
+        if (!ue2 && hit?.length) { persisted = true; stored += storedDocs.length; packs++; state.packs++; await saveState(); break; }
       }
       if (persisted) console.log(`${t.ocid}: stored ${"pack"} ok`);
       else console.log(`${t.ocid}: optimistic persist failed after retries`);
     } catch (e) { console.log(`${t.ocid}: err ${String(e.message).slice(0, 70)}`); }
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 45000 + Math.floor(Math.random() * 45000))); // 45-90 s between packs, like a person
   }
   console.log(`VIC done: ${packs} packs, ${stored} files stored`);
 } finally {

@@ -2,11 +2,13 @@ name: VIC documents (Mac runner)
 # VIC's Cloudflare blocks datacentre and cloud-browser IPs on login. This job runs on the owner's Mac (a home
 # connection, real Chrome). Scheduled and manual runs only: never on pull requests (personal machine).
 on:
-  # No schedule yet: from the home IP VIC's Cloudflare still answered "Sorry, you have been blocked" on 2026-11-24, so
-  # repeated automatic logins would only risk locking the account. Run by hand to re-test.
+  # Paced: one login every 4 hours (6 a day), at most 8 packs per run and 48 a day (VIC_DAILY_PACKS), 45-90 s between
+  # packs. A failed login locks the job for 24 h (state in R2), so a Cloudflare block never turns into repeated logins.
+  schedule:
+    - cron: "20 */4 * * *"
   workflow_dispatch:
     inputs:
-      vic_docs_limit: { description: "Max document packs to download this run", default: "12" }
+      vic_docs_limit: { description: "Max document packs to download this run", default: "8" }
 concurrency: { group: vic-docs-mac, cancel-in-progress: false }
 jobs:
   vic:
@@ -19,9 +21,14 @@ jobs:
       - name: VIC documents (home IP, real Chrome)
         env:
           VIC_LOCAL: "1"
+          R2_ACCOUNT_ENDPOINT: ${{ secrets.R2_ACCOUNT_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DOCS_BUCKET: ${{ secrets.R2_DOCS_BUCKET }}
+          VIC_DAILY_PACKS: "48"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           VIC_USER: ${{ secrets.VIC_USER }}
           VIC_PASS: ${{ secrets.VIC_PASS }}
-          VIC_DOCS_LIMIT: ${{ github.event.inputs.vic_docs_limit || '12' }}
+          VIC_DOCS_LIMIT: ${{ github.event.inputs.vic_docs_limit || '8' }}
         run: node scripts/vic-docs.mjs
